@@ -131,6 +131,14 @@ export type ThreadEventSink = {
   onError(err: Error): void
 }
 
+export type SendUserMessageResult = {
+  turnId: string
+  threadId: string
+  userMessageItemId?: string
+  immediateTools?: ToolEventPayload[]
+  completeImmediately?: boolean
+}
+
 export interface AgentProvider {
   readonly id: AgentProviderId
   readonly displayName: string
@@ -154,7 +162,7 @@ export interface AgentProvider {
     threadId: string,
     text: string,
     options?: { mode?: string; model?: string }
-  ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string }>
+  ): Promise<SendUserMessageResult>
   steerUserMessage?(threadId: string, turnId: string, text: string): Promise<void>
   interruptTurn(threadId: string, turnId: string): Promise<void>
   renameThread(threadId: string, title: string): Promise<void>

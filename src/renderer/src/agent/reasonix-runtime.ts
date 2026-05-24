@@ -3,9 +3,11 @@ import type {
   AgentProviderId,
   ChatBlock,
   NormalizedThread,
+  SendUserMessageResult,
   ThreadDeltaEvent,
   ThreadEventSink,
   ToolBlock,
+  ToolEventPayload,
   UserInputAnswer,
   UserInputQuestion
 } from './types'
@@ -203,6 +205,10 @@ function selectedReasonixModel(model: string | undefined): string | null {
   const value = model?.trim()
   if (!value || value === 'auto') return null
   return value
+}
+
+function isSlashCommand(text: string): boolean {
+  return parseSlashCommand(text) !== null
 }
 
 function isModelsCommand(text: string): boolean {
@@ -566,6 +572,9 @@ export class ReasonixRuntimeProvider implements AgentProvider {
     if (!fallback.ok) {
       throw toRuntimeError(readRuntimeError(fallback.body, `failed to switch Reasonix model to ${model}`))
     }
+
+    const confirmed = await this.waitForModel(model)
+    if (!confirmed) throw toRuntimeError({ message: `failed to switch Reasonix model to ${model}` })
   }
 
   private async getCurrentModel(): Promise<string | null> {
@@ -574,14 +583,25 @@ export class ReasonixRuntimeProvider implements AgentProvider {
     return parseJson<ReasonixModelsResponse>(r.body, {}).current?.trim() || null
   }
 
-  private async enqueueModelsCommandResult(threadId: string): Promise<void> {
+  private async waitForModel(model: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const current = await this.getCurrentModel()
+      if (current === model) return true
+      if (current === null) return true
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 120))
+    }
+    return false
+  }
+
+  private async modelsCommandResult(): Promise<ToolEventPayload> {
     const r = await window.dsGui.runtimeRequest('/api/models', 'GET')
     if (!r.ok) throw toRuntimeError(readRuntimeError(r.body, 'failed to list Reasonix models'))
-    this.pendingCommandCompletions.push({
-      threadId,
+    return {
       itemId: `reasonix-models-${Date.now()}-${this.pendingCommandCompletions.length}`,
+      summary: 'Reasonix models',
+      status: 'success',
       detail: formatModelsCommandResult(r.body)
-    })
+    }
   }
 
   private enqueueCommandCompletion(threadId: string, text: string): void {
@@ -607,7 +627,7 @@ export class ReasonixRuntimeProvider implements AgentProvider {
     threadId: string,
     text: string,
     options?: { mode?: string; model?: string }
-  ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string }> {
+  ): Promise<SendUserMessageResult> {
     const sessions = await this.listSessions().catch(() => ({} as ReasonixSessionsResponse))
     const currentSession = sessions.currentSession || CURRENT_THREAD_ID
     if (threadId !== CURRENT_THREAD_ID && threadId !== currentSession) {
@@ -619,13 +639,17 @@ export class ReasonixRuntimeProvider implements AgentProvider {
       if (!switched.ok) throw toRuntimeError(readRuntimeError(switched.body, 'failed to switch Reasonix session'))
     }
 
-    const model = selectedReasonixModel(options?.model)
-    if (model) await this.applyModel(model)
-
     if (isModelsCommand(text)) {
-      await this.enqueueModelsCommandResult(threadId)
-      return { turnId: `reasonix-turn-${Date.now()}`, threadId }
+      return {
+        turnId: `reasonix-turn-${Date.now()}`,
+        threadId,
+        immediateTools: [await this.modelsCommandResult()],
+        completeImmediately: true
+      }
     }
+
+    const model = selectedReasonixModel(options?.model)
+    if (model && !isSlashCommand(text)) await this.applyModel(model)
 
     const r = await window.dsGui.runtimeRequest('/api/submit', 'POST', JSON.stringify({ prompt: text }))
     if (!r.ok) throw toRuntimeError(readRuntimeError(r.body, 'failed to submit prompt to Reasonix'))

@@ -1362,10 +1362,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const runtimeText = channel
         ? buildClawRuntimePrompt(await window.dsGui.getSettings(), trimmedText, { channel })
         : trimmedText
-      const { turnId, userMessageItemId } = await p.sendUserMessage(activeThreadId, runtimeText, {
+      const sendResult = await p.sendUserMessage(activeThreadId, runtimeText, {
         mode,
         ...(composerModel ? { model: composerModel } : {})
       })
+      const { turnId, userMessageItemId } = sendResult
       // Mirror the composer model selection against the runtime's stable
       // user_message item id so the badge survives page refresh / thread
       // re-selection. The runtime itself doesn't persist per-turn metadata.
@@ -1442,10 +1443,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
       set({ currentTurnId: turnId })
-      const ac = sseAbort = new AbortController()
       const sink = buildThreadEventSink(set, get)
-      void p.subscribeThreadEvents(activeThreadId, seqAtSend, sink, ac.signal)
-      armBusyWatchdog(set, get)
+      if (sendResult.immediateTools?.length) {
+        for (const tool of sendResult.immediateTools) sink.onTool(tool)
+      }
+      if (sendResult.completeImmediately) {
+        sink.onTurnComplete()
+      } else {
+        const ac = sseAbort = new AbortController()
+        void p.subscribeThreadEvents(activeThreadId, seqAtSend, sink, ac.signal)
+        armBusyWatchdog(set, get)
+      }
       await get().refreshThreads()
       return true
     } catch (e) {
