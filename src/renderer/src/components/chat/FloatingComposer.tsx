@@ -395,6 +395,10 @@ function getSlashQuery(input: string): string | null {
   return trimmed.slice(1).toLowerCase()
 }
 
+function normalizeSlashCommandText(value: string): string {
+  return value.trim().toLowerCase()
+}
+
 export function FloatingComposer({
   input,
   setInput,
@@ -536,7 +540,11 @@ export function FloatingComposer({
     filteredSlashCommands.length > 0
       ? filteredSlashCommands[Math.min(selectedCommandIndex, filteredSlashCommands.length - 1)]
       : null
-  const primaryActionLabel = highlightedSlashCommand
+  const canSendHighlightedRuntimeCommand =
+    highlightedSlashCommand?.kind === 'runtime' &&
+    !highlightedSlashCommand.slashText.includes('<') &&
+    normalizeSlashCommandText(input) === normalizeSlashCommandText(highlightedSlashCommand.slashText)
+  const primaryActionLabel = highlightedSlashCommand && !canSendHighlightedRuntimeCommand
     ? t('slashCommandApply')
     : busy
       ? t('queueMessage')
@@ -599,7 +607,7 @@ export function FloatingComposer({
   }
 
   const handlePrimaryAction = (): void => {
-    if (highlightedSlashCommand) {
+    if (highlightedSlashCommand && !canSendHighlightedRuntimeCommand) {
       applySlashCommand(highlightedSlashCommand)
       return
     }
