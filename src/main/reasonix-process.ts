@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { delimiter, join, resolve } from 'node:path'
 import {
   DEFAULT_DEEPSEEK_BASE_URL,
   type AppSettingsV1
@@ -42,6 +42,24 @@ function rememberOutput(chunk: unknown): void {
 
 function isReasonixCommand(command: string): boolean {
   return command.toLowerCase().includes('reasonix')
+}
+
+function reasonixChildPath(): string {
+  const home = homedir()
+  const entries = [
+    process.env.PATH,
+    join(home, '.local', 'bin'),
+    join(home, '.local', 'node', 'bin'),
+    join(home, '.nvm', 'current', 'bin'),
+    join(home, '.bun', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin'
+  ]
+  return [...new Set(entries.flatMap((entry) => (entry ?? '').split(delimiter)).filter(Boolean))].join(delimiter)
 }
 
 function configuredReasonixToken(settings: AppSettingsV1): string {
@@ -226,7 +244,11 @@ export async function startReasonixChild(settings: AppSettingsV1): Promise<void>
   const model = settings.reasonix.model.trim()
   if (model) args.push('--model', model)
 
-  const env: NodeJS.ProcessEnv = { ...process.env, REASONIX_DASHBOARD_TOKEN: token }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: reasonixChildPath(),
+    REASONIX_DASHBOARD_TOKEN: token
+  }
   const apiKey = settings.deepseek.apiKey.trim()
   if (apiKey) env.DEEPSEEK_API_KEY = apiKey
   const baseUrl = settings.deepseek.baseUrl.trim()
