@@ -9,7 +9,7 @@ import {
   syncClawScheduleMcpConfig,
   type ClawScheduleMcpLaunchConfig
 } from './claw-schedule-mcp-config'
-import { defaultClawSettings, type AppSettingsV1 } from '../shared/app-settings'
+import { defaultClawSettings, defaultReasonixSettings, type AppSettingsV1 } from '../shared/app-settings'
 
 function createSettings(patch: Partial<AppSettingsV1['claw']['im']> = {}): AppSettingsV1 {
   const claw = defaultClawSettings()
@@ -30,6 +30,7 @@ function createSettings(patch: Partial<AppSettingsV1['claw']['im']> = {}): AppSe
       approvalPolicy: 'auto',
       sandboxMode: 'workspace-write'
     },
+    reasonix: defaultReasonixSettings(),
     workspaceRoot: '/tmp/workspace',
     log: {
       enabled: true,

@@ -6,8 +6,9 @@ import { useChatStore } from '../store/chat-store'
 import { Eye, EyeOff, ExternalLink, Sparkles, Sun, Moon, Monitor, X } from 'lucide-react'
 
 type ThemePref = AppSettingsV1['theme']
-type SetupFormPatch = Partial<Omit<AppSettingsV1, 'deepseek'>> & {
+type SetupFormPatch = Partial<Omit<AppSettingsV1, 'deepseek' | 'reasonix'>> & {
   deepseek?: Partial<AppSettingsV1['deepseek']>
+  reasonix?: Partial<AppSettingsV1['reasonix']>
 }
 
 const themeOptions: { value: ThemePref; icon: typeof Sun; labelKey: string }[] = [
@@ -45,7 +46,8 @@ export function InitialSetupDialog(): ReactElement {
     const next: AppSettingsV1 = {
       ...form,
       ...patch,
-      deepseek: { ...form.deepseek, ...(patch.deepseek ?? {}) }
+      deepseek: { ...form.deepseek, ...(patch.deepseek ?? {}) },
+      reasonix: { ...form.reasonix, ...(patch.reasonix ?? {}) }
     }
     setForm(next)
   }
@@ -69,7 +71,7 @@ export function InitialSetupDialog(): ReactElement {
 
   const handleSave = async () => {
     if (!form) return
-    if (!form.deepseek.apiKey.trim()) {
+    if (form.agentProvider === 'deepseek-runtime' && !form.deepseek.apiKey.trim()) {
       setError(t('firstRunApiKeyValidation'))
       return
     }

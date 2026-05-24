@@ -14,6 +14,17 @@ import {
   reclaimDeepseekPort,
   inspectDeepseekLaunchConfig
 } from './deepseek-process'
+import {
+  getReasonixBaseUrl,
+  getReasonixProcessSnapshot,
+  getReasonixRuntimeToken,
+  inspectReasonixLaunchConfig,
+  isReasonixChildRunning,
+  startReasonixChild,
+  stopReasonixChild,
+  stopReasonixChildAndWait,
+  waitForReasonixHealth
+} from './reasonix-process'
 import { resolveDeepseekExecutable } from './resolve-deepseek-binary'
 import {
   mergeClawSettings,
@@ -733,6 +744,10 @@ function takeSseBlock(buffer: string): { block: string; rest: string } | null {
 let runtimeEnsurePromise: Promise<void> | null = null
 let runtimeSettingsApplyPromise: Promise<void> | null = null
 
+function isReasonixRuntime(settings: AppSettingsV1): boolean {
+  return settings.agentProvider === 'reasonix-runtime'
+}
+
 function queueRuntimeSettingsApply(prev: AppSettingsV1, next: AppSettingsV1): void {
   if (!deepseekTuiConfigChanged(prev, next) && !runtimeStartupConfigChanged(prev, next)) {
     return
@@ -776,6 +791,10 @@ async function ensureRuntime(settings: AppSettingsV1): Promise<void> {
 
 async function ensureRuntimeOnce(settings: AppSettingsV1): Promise<void> {
   await waitForQueuedRuntimeSettingsApply()
+  if (isReasonixRuntime(settings)) {
+    await ensureReasonixRuntimeOnce(settings)
+    return
+  }
 
   const hasApiKey = Boolean(resolveConfiguredApiKey(settings))
   const runtimeToken = settings.deepseek.runtimeToken?.trim() ?? ''
@@ -866,6 +885,57 @@ async function ensureRuntimeOnce(settings: AppSettingsV1): Promise<void> {
   }
 }
 
+async function ensureReasonixRuntimeOnce(settings: AppSettingsV1): Promise<void> {
+  const healthy = await waitForReasonixHealth(settings, 2000)
+  if (healthy) return
+
+  if (!settings.reasonix.autoStart) {
+    throw runtimeJsonError(
+      'runtime_offline',
+      'The Reasonix dashboard runtime is offline. Enable automatic startup in Settings, or start `reasonix code --dashboard-port` manually.'
+    )
+  }
+
+  if (settings.reasonix.portMode === 'fixed' || isReasonixChildRunning()) {
+    const launch = await inspectReasonixLaunchConfig(settings)
+    if (launch.state === 'non-reasonix') {
+      throw runtimeJsonError(
+        'runtime_port_conflict',
+        `Port ${settings.reasonix.port} is already in use by another process. Stop that process or change the Reasonix dashboard port in Settings.`
+      )
+    }
+    if (launch.state === 'reasonix' && !isReasonixChildRunning()) {
+      throw runtimeJsonError(
+        'runtime_auth_required',
+        'A Reasonix dashboard is already listening on the configured port, but the GUI cannot authenticate to it. Paste that dashboard token in Settings, stop the existing Reasonix process, or choose another port.'
+      )
+    }
+    if (launch.state === 'reasonix' && isReasonixChildRunning()) {
+      await stopReasonixChildAndWait()
+    }
+  }
+
+  try {
+    await startReasonixChild(settings)
+  } catch (e) {
+    console.error('[deepseek-gui] failed to start reasonix:', e)
+    throw e
+  }
+
+  const started = await waitForReasonixHealth(settings, 30_000)
+  if (!started) {
+    const snapshot = getReasonixProcessSnapshot()
+    const exitDetail = snapshot.lastExit
+      ? ` Reasonix exited before becoming healthy (code ${snapshot.lastExit.code ?? 'null'}, signal ${snapshot.lastExit.signal ?? 'null'}).`
+      : ''
+    const outputDetail = snapshot.output ? ` Last output:\n${snapshot.output}` : ''
+    throw runtimeJsonError(
+      'runtime_unhealthy',
+      `The Reasonix dashboard runtime did not become healthy after launch.${exitDetail}${outputDetail}`
+    )
+  }
+}
+
 function createWindow(): void {
   traceStartup('createWindow:start')
   const preloadPath = resolvePreloadPath()
@@ -940,15 +1010,62 @@ function deepseekLaunchConfigChanged(prev: AppSettingsV1, next: AppSettingsV1): 
   )
 }
 
+function reasonixLaunchConfigChanged(prev: AppSettingsV1, next: AppSettingsV1): boolean {
+  const a = prev.reasonix
+  const b = next.reasonix
+  return (
+    prev.agentProvider !== next.agentProvider ||
+    a.binaryPath !== b.binaryPath ||
+    a.host !== b.host ||
+    a.portMode !== b.portMode ||
+    a.port !== b.port ||
+    a.autoStart !== b.autoStart ||
+    a.workspaceRoot !== b.workspaceRoot ||
+    a.dashboardToken !== b.dashboardToken ||
+    a.model !== b.model ||
+    prev.workspaceRoot !== next.workspaceRoot ||
+    prev.deepseek.apiKey !== next.deepseek.apiKey ||
+    prev.deepseek.baseUrl !== next.deepseek.baseUrl
+  )
+}
+
 function runtimeStartupConfigChanged(prev: AppSettingsV1, next: AppSettingsV1): boolean {
-  return deepseekLaunchConfigChanged(prev, next) || clawScheduleMcpSettingsChanged(prev, next)
+  const touchesDeepseekRuntime =
+    prev.agentProvider === 'deepseek-runtime' ||
+    next.agentProvider === 'deepseek-runtime' ||
+    clawScheduleMcpSettingsChanged(prev, next)
+  const touchesReasonixRuntime =
+    prev.agentProvider === 'reasonix-runtime' ||
+    next.agentProvider === 'reasonix-runtime'
+  return (
+    (touchesDeepseekRuntime && deepseekLaunchConfigChanged(prev, next)) ||
+    (touchesReasonixRuntime && reasonixLaunchConfigChanged(prev, next)) ||
+    clawScheduleMcpSettingsChanged(prev, next)
+  )
 }
 
 async function restartManagedRuntimeForSettingsChange(
   prev: AppSettingsV1,
   next: AppSettingsV1
 ): Promise<void> {
-  if (!runtimeStartupConfigChanged(prev, next) || !isDeepseekChildRunning()) return
+  if (!runtimeStartupConfigChanged(prev, next)) return
+
+  if (isReasonixChildRunning()) {
+    await stopReasonixChildAndWait()
+    if (next.agentProvider === 'reasonix-runtime' && next.reasonix.autoStart) {
+      try {
+        await startReasonixChild(next)
+        const healthy = await waitForReasonixHealth(next, 30_000)
+        if (!healthy) {
+          console.warn('[deepseek-gui] Reasonix runtime restart did not become healthy after settings change')
+        }
+      } catch (e) {
+        console.warn('[deepseek-gui] Reasonix runtime restart failed after settings change:', e)
+      }
+    }
+  }
+
+  if (!isDeepseekChildRunning()) return
 
   const samePort = prev.deepseek.port === next.deepseek.port
   await stopDeepseekChildAndWait()
@@ -961,7 +1078,7 @@ async function restartManagedRuntimeForSettingsChange(
     }
   }
 
-  if (!resolveConfiguredApiKey(next) || !next.deepseek.autoStart) {
+  if (next.agentProvider !== 'deepseek-runtime' || !resolveConfiguredApiKey(next) || !next.deepseek.autoStart) {
     return
   }
 
@@ -983,7 +1100,9 @@ async function runtimeRequest(
 ): Promise<{ ok: boolean; status: number; body: string }> {
   try {
     await ensureRuntime(settings)
-    const base = getRuntimeBaseUrl(settings.deepseek.port)
+    const base = isReasonixRuntime(settings)
+      ? getReasonixBaseUrl(settings)
+      : getRuntimeBaseUrl(settings.deepseek.port)
     const pathNorm = pathAndQuery.startsWith('/') ? pathAndQuery : `/${pathAndQuery}`
     const url = `${base}${pathNorm}`
     const hdrs = new Headers(init.headers ?? {})
@@ -991,7 +1110,9 @@ async function runtimeRequest(
     if (init.body && !hdrs.has('Content-Type')) {
       hdrs.set('Content-Type', 'application/json')
     }
-    if (settings.deepseek.runtimeToken) {
+    if (isReasonixRuntime(settings)) {
+      hdrs.set('X-Reasonix-Token', getReasonixRuntimeToken(settings))
+    } else if (settings.deepseek.runtimeToken) {
       hdrs.set('Authorization', `Bearer ${settings.deepseek.runtimeToken}`)
     }
     const res = await fetch(url, {
@@ -1060,11 +1181,11 @@ app.whenReady().then(async () => {
       ...prev,
       ...partial,
       deepseek: { ...prev.deepseek, ...(partial.deepseek ?? {}) },
+      reasonix: { ...prev.reasonix, ...(partial.reasonix ?? {}) },
       log: { ...prev.log, ...(partial.log ?? {}) },
       notifications: { ...prev.notifications, ...(partial.notifications ?? {}) },
       claw: mergeClawSettings(prev.claw, partial.claw),
-      guiUpdate: { ...prev.guiUpdate, ...(partial.guiUpdate ?? {}) },
-      agentProvider: 'deepseek-runtime'
+      guiUpdate: { ...prev.guiUpdate, ...(partial.guiUpdate ?? {}) }
     })
     if (prev.log.enabled !== next.log.enabled || prev.log.retentionDays !== next.log.retentionDays) {
       configureLogger({ enabled: next.log.enabled, retentionDays: next.log.retentionDays })
@@ -1163,6 +1284,22 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('deepseek:spawn-if-needed', async () => {
     const s = await store.load()
+    if (isReasonixRuntime(s)) {
+      try {
+        await ensureRuntime(s)
+      } catch (e) {
+        console.error('[deepseek-gui] reasonix spawn:', e)
+        logError('reasonix-spawn', 'Failed to start Reasonix runtime', { message: e instanceof Error ? e.message : String(e) })
+        return {
+          started: false,
+          healthy: false,
+          error: 'spawn_failed',
+          message: e instanceof Error ? e.message : String(e)
+        }
+      }
+      const ok = await waitForReasonixHealth(s, 2_000)
+      return { started: true, healthy: ok, pid: isReasonixChildRunning() }
+    }
     if (!resolveConfiguredApiKey(s)) {
       return {
         started: false,
@@ -1202,16 +1339,23 @@ app.whenReady().then(async () => {
     const ac = new AbortController()
     const state: SseControllerState = { controller: ac, stoppedByClient: false }
     sseControllers.set(id, state)
-    const base = getRuntimeBaseUrl(s.deepseek.port)
-    const token = s.deepseek.runtimeToken
-    const u = `${base}/v1/threads/${encodeURIComponent(request.threadId)}/events?since_seq=${request.sinceSeq}`
+    const reasonixRuntime = isReasonixRuntime(s)
+    const base = reasonixRuntime ? getReasonixBaseUrl(s) : getRuntimeBaseUrl(s.deepseek.port)
+    const token = reasonixRuntime ? getReasonixRuntimeToken(s) : s.deepseek.runtimeToken
+    const u = reasonixRuntime
+      ? `${base}/api/events`
+      : `${base}/v1/threads/${encodeURIComponent(request.threadId)}/events?since_seq=${request.sinceSeq}`
     const url = new URL(u)
-    if (token) url.searchParams.set('token', token)
+    if (token && !reasonixRuntime) url.searchParams.set('token', token)
 
     ;(async () => {
       const wc = event.sender
       const headers: Record<string, string> = { Accept: 'text/event-stream' }
-      if (token) headers.Authorization = `Bearer ${token}`
+      if (reasonixRuntime && token) {
+        headers['X-Reasonix-Token'] = token
+      } else if (token) {
+        headers.Authorization = `Bearer ${token}`
+      }
       try {
         const res = await fetch(url, { signal: ac.signal, headers })
         if (!res.ok || !res.body) {
@@ -1280,7 +1424,7 @@ app.whenReady().then(async () => {
     console.warn('[deepseek-gui] prune logs:', err)
   })
 
-  if (resolveConfiguredApiKey(initial)) {
+  if (initial.agentProvider === 'deepseek-runtime' && resolveConfiguredApiKey(initial)) {
     setTimeout(() => {
       void resolveDeepseekExecutable(initial.deepseek.binaryPath).catch((err) => {
         console.warn('[deepseek-gui] prewarm binary:', err)
@@ -1308,6 +1452,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   stopDeepseekChild()
+  stopReasonixChild()
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -1316,4 +1461,5 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   clawRuntime?.stop()
   stopDeepseekChild()
+  stopReasonixChild()
 })

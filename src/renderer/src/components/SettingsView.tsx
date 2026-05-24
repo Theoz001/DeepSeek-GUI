@@ -50,8 +50,9 @@ import { useChatStore, type SettingsRouteSection } from '../store/chat-store'
 
 type SettingsCategory = 'general' | 'agents' | 'claw'
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
-type SettingsPatch = Partial<Omit<AppSettingsV1, 'deepseek' | 'log' | 'notifications' | 'claw' | 'guiUpdate'>> & {
+type SettingsPatch = Partial<Omit<AppSettingsV1, 'deepseek' | 'reasonix' | 'log' | 'notifications' | 'claw' | 'guiUpdate'>> & {
   deepseek?: Partial<AppSettingsV1['deepseek']>
+  reasonix?: Partial<AppSettingsV1['reasonix']>
   log?: Partial<AppSettingsV1['log']>
   notifications?: Partial<AppSettingsV1['notifications']>
   claw?: ClawSettingsPatchV1
@@ -66,6 +67,15 @@ type SkillRootOption = {
 type InlineNotice = {
   tone: 'success' | 'error' | 'info'
   message: string
+}
+type ReasonixHealthInfo = {
+  version?: string
+  latestVersion?: string | null
+  sessions?: {
+    count?: number
+    totalBytes?: number
+  }
+  jobs?: number | null
 }
 
 const DEFAULT_WORKSPACE_ROOT = '~/.deepseekgui/default_workspace'
@@ -130,7 +140,9 @@ function clawScheduleSummary(
 }
 
 function hasValidPort(settings: AppSettingsV1): boolean {
-  const port = settings.deepseek.port
+  const port = settings.agentProvider === 'reasonix-runtime'
+    ? settings.reasonix.port
+    : settings.deepseek.port
   return Number.isFinite(port) && port >= 1 && port <= 65535
 }
 
@@ -177,6 +189,10 @@ function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): AppSetting
     deepseek: {
       ...current.deepseek,
       ...(patch.deepseek ?? {})
+    },
+    reasonix: {
+      ...current.reasonix,
+      ...(patch.reasonix ?? {})
     },
     log: {
       ...current.log,
@@ -242,6 +258,9 @@ export function SettingsView(): ReactElement {
   const [installingUpdate, setInstallingUpdate] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
   const [installResult, setInstallResult] = useState<DeepseekUpdateInstallResult | null>(null)
+  const [reasonixHealth, setReasonixHealth] = useState<ReasonixHealthInfo | null>(null)
+  const [checkingReasonixHealth, setCheckingReasonixHealth] = useState(false)
+  const [reasonixHealthError, setReasonixHealthError] = useState<string | null>(null)
   const [guiUpdateInfo, setGuiUpdateInfo] = useState<GuiUpdateInfo | null>(null)
   const [checkingGuiUpdate, setCheckingGuiUpdate] = useState(false)
   const [downloadingGuiUpdate, setDownloadingGuiUpdate] = useState(false)
@@ -275,7 +294,10 @@ export function SettingsView(): ReactElement {
   const formTheme = form?.theme
   const formUiFontScale = form?.uiFontScale
   const formWorkspaceRoot = form?.workspaceRoot
+  const formAgentProvider = form?.agentProvider
   const formPort = form?.deepseek.port
+  const formReasonixPort = form?.reasonix.port
+  const formReasonixPortMode = form?.reasonix.portMode
   const formDeepseekBinaryPath = form?.deepseek.binaryPath ?? ''
   const formGuiUpdateChannel = form?.guiUpdate.channel
 
@@ -362,6 +384,16 @@ export function SettingsView(): ReactElement {
     if (!hasValidPort({ deepseek: { port: formPort } } as AppSettingsV1)) return t('portInvalid')
     return null
   }, [formPort, t])
+  const reasonixPortError = useMemo(() => {
+    if (formReasonixPortMode !== 'fixed') return null
+    if (typeof formReasonixPort !== 'number') return null
+    if (!hasValidPort({
+      agentProvider: 'reasonix-runtime',
+      reasonix: { port: formReasonixPort }
+    } as AppSettingsV1)) return t('portInvalid')
+    return null
+  }, [formReasonixPort, formReasonixPortMode, t])
+  const activePortError = formAgentProvider === 'reasonix-runtime' ? reasonixPortError : portError
 
   const skillRootOptions = useMemo<SkillRootOption[]>(() => {
     const workspaceRoot = normalizeWorkspaceRoot(formWorkspaceRoot)
@@ -606,6 +638,28 @@ export function SettingsView(): ReactElement {
     }
   }
 
+  const checkReasonixHealth = async (): Promise<void> => {
+    setCheckingReasonixHealth(true)
+    setReasonixHealthError(null)
+    try {
+      await flushPendingSave()
+      const r = await window.dsGui.runtimeRequest('/api/health', 'GET')
+      if (!r.ok) {
+        setReasonixHealth(null)
+        setReasonixHealthError(r.body.trim() || `Reasonix health check failed (${r.status || 0})`)
+        return
+      }
+      const body = JSON.parse(r.body) as ReasonixHealthInfo
+      setReasonixHealth(body)
+      void probeRuntime('background')
+    } catch (e) {
+      setReasonixHealth(null)
+      setReasonixHealthError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCheckingReasonixHealth(false)
+    }
+  }
+
   const applyGuiUpdateState = useCallback((state: GuiUpdateState): void => {
     if ('info' in state && state.info) {
       setGuiUpdateInfo(state.info)
@@ -717,6 +771,7 @@ export function SettingsView(): ReactElement {
 
   useEffect(() => {
     if (!form || category !== 'agents') return
+    if (form.agentProvider !== 'deepseek-runtime') return
     const key = formDeepseekBinaryPath.trim() || '<managed>'
     if (checkedRuntimeUpdateKey.current === key) return
     checkedRuntimeUpdateKey.current = key
@@ -915,7 +970,7 @@ export function SettingsView(): ReactElement {
 
       <div className="ds-no-drag min-h-0 min-w-0 flex-1 overflow-y-auto px-10 py-10">
         <div className="mx-auto max-w-3xl">
-          {!form.deepseek.apiKey.trim() ? (
+          {form.agentProvider === 'deepseek-runtime' && !form.deepseek.apiKey.trim() ? (
             <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
               <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
               <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">
@@ -932,7 +987,7 @@ export function SettingsView(): ReactElement {
             <span
               title={saveStatus === 'error' && saveError ? saveError : undefined}
               className={`shrink-0 rounded-full px-3 py-1 text-[12px] font-medium ${
-                portError
+                activePortError
                   ? 'bg-amber-500/15 text-amber-700 dark:text-amber-200'
                   : saveStatus === 'saved'
                     ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200'
@@ -941,7 +996,7 @@ export function SettingsView(): ReactElement {
                       : 'bg-ds-subtle text-ds-muted'
               }`}
             >
-              {portError
+              {activePortError
                 ? t('autoApplyBlocked')
                 : saveStatus === 'saving'
                   ? t('applying')
@@ -1192,6 +1247,22 @@ export function SettingsView(): ReactElement {
               <div ref={agentsSectionRef}>
                 <SettingsCard title={t('agents')}>
                   <SettingRow
+                    title={t('runtimeProvider')}
+                    description={t('runtimeProviderDesc')}
+                    control={
+                      <select
+                        className={selectControlClass}
+                        value={form.agentProvider}
+                        onChange={(e) =>
+                          update({ agentProvider: e.target.value as AppSettingsV1['agentProvider'] })
+                        }
+                      >
+                        <option value="deepseek-runtime">{t('runtimeProviderDeepseek')}</option>
+                        <option value="reasonix-runtime">{t('runtimeProviderReasonix')}</option>
+                      </select>
+                    }
+                  />
+                  <SettingRow
                     title={t('configFilePath')}
                     description={t('configFilePathDesc')}
                     control={
@@ -1213,7 +1284,7 @@ export function SettingsView(): ReactElement {
                         onToggleVisibility={() => setShowApiKey((value) => !value)}
                         placeholder="sk-…"
                         autoComplete="off"
-                        invalid={!form.deepseek.apiKey.trim()}
+                        invalid={form.agentProvider === 'deepseek-runtime' && !form.deepseek.apiKey.trim()}
                         showLabel={t('showSecret')}
                         hideLabel={t('hideSecret')}
                         className="md:max-w-md"
@@ -1232,102 +1303,244 @@ export function SettingsView(): ReactElement {
                       />
                     }
                   />
-                  <SettingRow
-                    title={t('autoStart')}
-                    description={t('autoStartDesc')}
-                    control={
-                      <Toggle
-                        checked={form.deepseek.autoStart}
-                        onChange={(v) => update({ deepseek: { autoStart: v } })}
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('port')}
-                    description={t('portDesc')}
-                    control={
-                      <div>
-                        <input
-                          type="number"
-                          min={1}
-                          max={65535}
-                          className={`w-28 rounded-xl border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:outline-none focus:ring-1 ${
-                            portError
-                              ? 'border-red-400 focus:ring-red-300'
-                              : 'border-ds-border focus:border-accent/40 focus:ring-accent/30'
-                          }`}
-                          value={form.deepseek.port}
-                          onChange={(e) => update({ deepseek: { port: Number(e.target.value) } })}
-                        />
-                        {portError ? (
-                          <p className="mt-1 text-[12px] text-red-700 dark:text-red-300">{portError}</p>
-                        ) : null}
-                      </div>
-                    }
-                  />
-                  <SettingRow
-                    title={t('deepseekBinary')}
-                    description={t('deepseekBinaryHint')}
-                    control={
-                      <input
-                        className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
-                        placeholder={t('deepseekBinaryPlaceholder')}
-                        value={form.deepseek.binaryPath}
-                        onChange={(e) => update({ deepseek: { binaryPath: e.target.value } })}
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('tuiUpdate')}
-                    description={t('tuiUpdateDesc')}
-                    control={
-                      <DeepseekUpdateControl
-                        info={updateInfo}
-                        checking={checkingUpdate}
-                        installing={installingUpdate}
-                        error={updateError}
-                        installResult={installResult}
-                        onCheck={checkRuntimeUpdate}
-                        onInstall={installRuntimeUpdate}
-                        t={t}
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('runtimeToken')}
-                    description={t('runtimeTokenDesc')}
-                    control={
-                      <SecretInput
-                        value={form.deepseek.runtimeToken}
-                        onChange={(value) => update({ deepseek: { runtimeToken: value } })}
-                        visible={showRuntimeToken}
-                        onToggleVisibility={() => setShowRuntimeToken((value) => !value)}
-                        showLabel={t('showSecret')}
-                        hideLabel={t('hideSecret')}
-                        className="md:max-w-md"
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('corsOrigins')}
-                    description={t('corsOriginsDesc')}
-                    control={
-                      <input
-                        className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
-                        value={corsValue}
-                        onChange={(e) =>
-                          update({
-                            deepseek: {
-                              extraCorsOrigins: e.target.value
-                                .split(',')
-                                .map((s) => s.trim())
-                                .filter(Boolean)
-                            }
-                          })
+                  {form.agentProvider === 'deepseek-runtime' ? (
+                    <>
+                      <SettingRow
+                        title={t('autoStart')}
+                        description={t('autoStartDesc')}
+                        control={
+                          <Toggle
+                            checked={form.deepseek.autoStart}
+                            onChange={(v) => update({ deepseek: { autoStart: v } })}
+                          />
                         }
                       />
-                    }
-                  />
+                      <SettingRow
+                        title={t('port')}
+                        description={t('portDesc')}
+                        control={
+                          <div>
+                            <input
+                              type="number"
+                              min={1}
+                              max={65535}
+                              className={`w-28 rounded-xl border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:outline-none focus:ring-1 ${
+                                portError
+                                  ? 'border-red-400 focus:ring-red-300'
+                                  : 'border-ds-border focus:border-accent/40 focus:ring-accent/30'
+                              }`}
+                              value={form.deepseek.port}
+                              onChange={(e) => update({ deepseek: { port: Number(e.target.value) } })}
+                            />
+                            {portError ? (
+                              <p className="mt-1 text-[12px] text-red-700 dark:text-red-300">{portError}</p>
+                            ) : null}
+                          </div>
+                        }
+                      />
+                      <SettingRow
+                        title={t('deepseekBinary')}
+                        description={t('deepseekBinaryHint')}
+                        control={
+                          <input
+                            className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                            placeholder={t('deepseekBinaryPlaceholder')}
+                            value={form.deepseek.binaryPath}
+                            onChange={(e) => update({ deepseek: { binaryPath: e.target.value } })}
+                          />
+                        }
+                      />
+                      <SettingRow
+                        title={t('tuiUpdate')}
+                        description={t('tuiUpdateDesc')}
+                        control={
+                          <DeepseekUpdateControl
+                            info={updateInfo}
+                            checking={checkingUpdate}
+                            installing={installingUpdate}
+                            error={updateError}
+                            installResult={installResult}
+                            onCheck={checkRuntimeUpdate}
+                            onInstall={installRuntimeUpdate}
+                            t={t}
+                          />
+                        }
+                      />
+                    </>
+                  ) : null}
+                  {form.agentProvider === 'reasonix-runtime' ? (
+                    <>
+                      <SettingRow
+                        title={t('reasonixBinary')}
+                        description={t('reasonixBinaryDesc')}
+                        control={
+                          <input
+                            className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                            placeholder={t('reasonixBinaryPlaceholder')}
+                            value={form.reasonix.binaryPath}
+                            onChange={(e) => update({ reasonix: { binaryPath: e.target.value } })}
+                          />
+                        }
+                      />
+                      <SettingRow
+                        title={t('reasonixAutoStart')}
+                        description={t('reasonixAutoStartDesc')}
+                        control={
+                          <Toggle
+                            checked={form.reasonix.autoStart}
+                            onChange={(v) => update({ reasonix: { autoStart: v } })}
+                          />
+                        }
+                      />
+                      <SettingRow
+                        title={t('reasonixHost')}
+                        description={t('reasonixHostDesc')}
+                        control={
+                          <input
+                            className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                            placeholder="127.0.0.1"
+                            value={form.reasonix.host}
+                            onChange={(e) => update({ reasonix: { host: e.target.value } })}
+                          />
+                        }
+                      />
+                      <SettingRow
+                        title={t('reasonixPortMode')}
+                        description={t('reasonixPortModeDesc')}
+                        control={
+                          <select
+                            className={selectControlClass}
+                            value={form.reasonix.portMode}
+                            onChange={(e) =>
+                              update({
+                                reasonix: {
+                                  portMode: e.target.value as AppSettingsV1['reasonix']['portMode']
+                                }
+                              })
+                            }
+                          >
+                            <option value="auto">{t('reasonixPortModeAuto')}</option>
+                            <option value="fixed">{t('reasonixPortModeFixed')}</option>
+                          </select>
+                        }
+                      />
+                      <SettingRow
+                        title={t('reasonixPort')}
+                        description={t('reasonixPortDesc')}
+                        control={
+                          <div>
+                            <input
+                              type="number"
+                              min={1}
+                              max={65535}
+                              disabled={form.reasonix.portMode !== 'fixed'}
+                              className={`w-28 rounded-xl border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:outline-none focus:ring-1 ${
+                                reasonixPortError
+                                  ? 'border-red-400 focus:ring-red-300'
+                                  : 'border-ds-border focus:border-accent/40 focus:ring-accent/30'
+                              }`}
+                              value={form.reasonix.port}
+                              onChange={(e) => update({ reasonix: { port: Number(e.target.value) } })}
+                            />
+                            {reasonixPortError ? (
+                              <p className="mt-1 text-[12px] text-red-700 dark:text-red-300">{reasonixPortError}</p>
+                            ) : null}
+                          </div>
+                        }
+                      />
+                      <SettingRow
+                        title={t('reasonixWorkspace')}
+                        description={t('reasonixWorkspaceDesc')}
+                        control={
+                          <input
+                            className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                            placeholder={form.workspaceRoot || t('reasonixWorkspacePlaceholder')}
+                            value={form.reasonix.workspaceRoot}
+                            onChange={(e) => update({ reasonix: { workspaceRoot: e.target.value } })}
+                          />
+                        }
+                      />
+                      <SettingRow
+                        title={t('reasonixDashboardToken')}
+                        description={t('reasonixDashboardTokenDesc')}
+                        control={
+                          <SecretInput
+                            value={form.reasonix.dashboardToken}
+                            onChange={(value) => update({ reasonix: { dashboardToken: value } })}
+                            visible={showRuntimeToken}
+                            onToggleVisibility={() => setShowRuntimeToken((value) => !value)}
+                            showLabel={t('showSecret')}
+                            hideLabel={t('hideSecret')}
+                            className="md:max-w-md"
+                          />
+                        }
+                      />
+                      <SettingRow
+                        title={t('reasonixModel')}
+                        description={t('reasonixModelDesc')}
+                        control={
+                          <input
+                            className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                            placeholder={t('reasonixModelPlaceholder')}
+                            value={form.reasonix.model}
+                            onChange={(e) => update({ reasonix: { model: e.target.value } })}
+                          />
+                        }
+                      />
+                      <SettingRow
+                        title={t('reasonixHealth')}
+                        description={t('reasonixHealthDesc')}
+                        control={
+                          <ReasonixHealthControl
+                            info={reasonixHealth}
+                            checking={checkingReasonixHealth}
+                            error={reasonixHealthError}
+                            onCheck={checkReasonixHealth}
+                            t={t}
+                          />
+                        }
+                      />
+                    </>
+                  ) : null}
+                  {form.agentProvider === 'deepseek-runtime' ? (
+                    <>
+                      <SettingRow
+                        title={t('runtimeToken')}
+                        description={t('runtimeTokenDesc')}
+                        control={
+                          <SecretInput
+                            value={form.deepseek.runtimeToken}
+                            onChange={(value) => update({ deepseek: { runtimeToken: value } })}
+                            visible={showRuntimeToken}
+                            onToggleVisibility={() => setShowRuntimeToken((value) => !value)}
+                            showLabel={t('showSecret')}
+                            hideLabel={t('hideSecret')}
+                            className="md:max-w-md"
+                          />
+                        }
+                      />
+                      <SettingRow
+                        title={t('corsOrigins')}
+                        description={t('corsOriginsDesc')}
+                        control={
+                          <input
+                            className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                            value={corsValue}
+                            onChange={(e) =>
+                              update({
+                                deepseek: {
+                                  extraCorsOrigins: e.target.value
+                                    .split(',')
+                                    .map((s) => s.trim())
+                                    .filter(Boolean)
+                                }
+                              })
+                            }
+                          />
+                        }
+                      />
+                    </>
+                  ) : null}
                 </SettingsCard>
               </div>
 
@@ -1491,51 +1704,59 @@ export function SettingsView(): ReactElement {
 
               <div ref={permissionsSectionRef} className="mt-6">
                 <SettingsCard title={t('permissions')}>
-                  <SettingRow
-                    title={t('approvalPolicy')}
-                    description={t('approvalPolicyDesc')}
-                    control={
-                      <select
-                        className={selectControlClass}
-                        value={form.deepseek.approvalPolicy}
-                        onChange={(e) =>
-                          update({
-                            deepseek: {
-                              approvalPolicy: e.target.value as ApprovalPolicy
+                  {form.agentProvider === 'reasonix-runtime' ? (
+                    <div className="rounded-xl border border-ds-border bg-ds-main/50 px-3 py-2 text-[13px] leading-6 text-ds-muted">
+                      {t('reasonixPermissionsDesc')}
+                    </div>
+                  ) : (
+                    <>
+                      <SettingRow
+                        title={t('approvalPolicy')}
+                        description={t('approvalPolicyDesc')}
+                        control={
+                          <select
+                            className={selectControlClass}
+                            value={form.deepseek.approvalPolicy}
+                            onChange={(e) =>
+                              update({
+                                deepseek: {
+                                  approvalPolicy: e.target.value as ApprovalPolicy
+                                }
+                              })
                             }
-                          })
+                          >
+                            <option value="auto">{t('approvalAuto')}</option>
+                            <option value="on-request">{t('approvalOnRequest')}</option>
+                            <option value="untrusted">{t('approvalUntrusted')}</option>
+                            <option value="suggest">{t('approvalSuggest')}</option>
+                            <option value="never">{t('approvalNever')}</option>
+                          </select>
                         }
-                      >
-                        <option value="auto">{t('approvalAuto')}</option>
-                        <option value="on-request">{t('approvalOnRequest')}</option>
-                        <option value="untrusted">{t('approvalUntrusted')}</option>
-                        <option value="suggest">{t('approvalSuggest')}</option>
-                        <option value="never">{t('approvalNever')}</option>
-                      </select>
-                    }
-                  />
-                  <SettingRow
-                    title={t('sandboxMode')}
-                    description={t('sandboxModeDesc')}
-                    control={
-                      <select
-                        className={selectControlClass}
-                        value={form.deepseek.sandboxMode}
-                        onChange={(e) =>
-                          update({
-                            deepseek: {
-                              sandboxMode: e.target.value as SandboxMode
+                      />
+                      <SettingRow
+                        title={t('sandboxMode')}
+                        description={t('sandboxModeDesc')}
+                        control={
+                          <select
+                            className={selectControlClass}
+                            value={form.deepseek.sandboxMode}
+                            onChange={(e) =>
+                              update({
+                                deepseek: {
+                                  sandboxMode: e.target.value as SandboxMode
+                                }
+                              })
                             }
-                          })
+                          >
+                            <option value="workspace-write">{t('sandboxWorkspaceWrite')}</option>
+                            <option value="read-only">{t('sandboxReadOnly')}</option>
+                            <option value="danger-full-access">{t('sandboxFullAccess')}</option>
+                            <option value="external-sandbox">{t('sandboxExternal')}</option>
+                          </select>
                         }
-                      >
-                        <option value="workspace-write">{t('sandboxWorkspaceWrite')}</option>
-                        <option value="read-only">{t('sandboxReadOnly')}</option>
-                        <option value="danger-full-access">{t('sandboxFullAccess')}</option>
-                        <option value="external-sandbox">{t('sandboxExternal')}</option>
-                      </select>
-                    }
-                  />
+                      />
+                    </>
+                  )}
                 </SettingsCard>
               </div>
             </>
@@ -1886,6 +2107,75 @@ function DeepseekUpdateControl({
             {t('tuiUpdateInstall')}
           </button>
         ) : null}
+      </div>
+    </div>
+  )
+}
+
+function ReasonixHealthControl({
+  info,
+  checking,
+  error,
+  onCheck,
+  t
+}: {
+  info: ReasonixHealthInfo | null
+  checking: boolean
+  error: string | null
+  onCheck: () => Promise<void>
+  t: (key: string, values?: Record<string, unknown>) => string
+}): ReactElement {
+  const title = checking
+    ? t('reasonixHealthChecking')
+    : error
+      ? t('reasonixHealthFailed')
+      : info
+        ? t('reasonixHealthReady', { version: info.version || t('reasonixHealthUnknownVersion') })
+        : t('reasonixHealthUnknown')
+  const detail =
+    info && !error
+      ? t('reasonixHealthDetail', {
+          sessions: Number.isFinite(info.sessions?.count) ? info.sessions?.count : 0,
+          jobs: Number.isFinite(info.jobs) ? info.jobs : 0
+        })
+      : error
+
+  const panelClass =
+    error
+      ? 'border-red-300 bg-red-50 text-red-950 dark:border-red-800/70 dark:bg-red-950/25 dark:text-red-100'
+      : info
+        ? 'border-emerald-300 bg-emerald-50 text-emerald-950 dark:border-emerald-700/70 dark:bg-emerald-950/30 dark:text-emerald-100'
+        : 'border-ds-border bg-ds-card text-ds-ink'
+
+  return (
+    <div className="w-full min-w-0 md:max-w-md">
+      <div className={`rounded-xl border px-3 py-2.5 shadow-sm ${panelClass}`}>
+        <div className="flex items-start gap-2">
+          {checking ? (
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" strokeWidth={2} />
+          ) : error ? (
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} />
+          ) : (
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} />
+          )}
+          <div className="min-w-0">
+            <div className="break-words text-[13px] font-semibold">{title}</div>
+            {detail ? (
+              <div className="mt-0.5 break-words text-[12px] leading-5 opacity-75">{detail}</div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void onCheck()}
+          disabled={checking}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${checking ? 'animate-spin' : ''}`} strokeWidth={1.75} />
+          {t('reasonixHealthCheck')}
+        </button>
       </div>
     </div>
   )

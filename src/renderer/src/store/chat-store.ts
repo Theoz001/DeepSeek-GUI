@@ -726,7 +726,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         const settings = await window.dsGui.getSettings()
         const workspaceRoot = normalizeWorkspaceRoot(settings.workspaceRoot)
-        const needsInitialSetup = !settings.deepseek.apiKey.trim()
+        const needsInitialSetup =
+          settings.agentProvider === 'deepseek-runtime' && !settings.deepseek.apiKey.trim()
         applyTheme(settings.theme)
         applyUiFontScale(settings.uiFontScale)
         await get().applyI18nFromSettings(settings.locale)

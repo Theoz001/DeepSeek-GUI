@@ -12,6 +12,8 @@ export type ClawImProvider = 'feishu'
 export type ClawScheduleKind = 'manual' | 'interval' | 'daily' | 'at'
 export type ClawTaskStatus = 'idle' | 'running' | 'success' | 'error'
 export type ClawModel = 'auto' | 'deepseek-v4-pro' | 'deepseek-v4-flash'
+export type AgentProviderId = 'deepseek-runtime' | 'reasonix-runtime'
+export type ReasonixPortMode = 'auto' | 'fixed'
 
 export const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/beta'
 export const DEFAULT_CLAW_MODEL = 'auto'
@@ -29,6 +31,17 @@ export type DeepseekSettingsV1 = {
   approvalPolicy: ApprovalPolicy
   /** Forwarded as `--sandbox-mode` to `deepseek serve`. */
   sandboxMode: SandboxMode
+}
+
+export type ReasonixSettingsV1 = {
+  binaryPath: string
+  host: string
+  portMode: ReasonixPortMode
+  port: number
+  autoStart: boolean
+  workspaceRoot: string
+  dashboardToken: string
+  model: string
 }
 
 export type LogConfigV1 = {
@@ -177,8 +190,9 @@ export type AppSettingsV1 = {
   locale: 'en' | 'zh'
   theme: 'system' | 'light' | 'dark'
   uiFontScale: UiFontScale
-  agentProvider: 'deepseek-runtime'
+  agentProvider: AgentProviderId
   deepseek: DeepseekSettingsV1
+  reasonix: ReasonixSettingsV1
   workspaceRoot: string
   log: LogConfigV1
   notifications: NotificationConfigV1
@@ -187,9 +201,10 @@ export type AppSettingsV1 = {
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'deepseek' | 'log' | 'notifications' | 'claw' | 'guiUpdate'>
+  Omit<AppSettingsV1, 'deepseek' | 'reasonix' | 'log' | 'notifications' | 'claw' | 'guiUpdate'>
 > & {
   deepseek?: Partial<DeepseekSettingsV1>
+  reasonix?: Partial<ReasonixSettingsV1>
   log?: Partial<LogConfigV1>
   notifications?: Partial<NotificationConfigV1>
   claw?: ClawSettingsPatchV1
@@ -389,6 +404,42 @@ function normalizePositiveInteger(value: unknown, fallback: number, min: number,
   return Math.min(max, Math.max(min, Math.floor(parsed)))
 }
 
+function normalizeAgentProvider(value: unknown): AgentProviderId {
+  return value === 'reasonix-runtime' ? 'reasonix-runtime' : 'deepseek-runtime'
+}
+
+function normalizeReasonixPortMode(value: unknown): ReasonixPortMode {
+  return value === 'fixed' ? 'fixed' : 'auto'
+}
+
+export function defaultReasonixSettings(): ReasonixSettingsV1 {
+  return {
+    binaryPath: '',
+    host: '127.0.0.1',
+    portMode: 'auto',
+    port: 9876,
+    autoStart: true,
+    workspaceRoot: '',
+    dashboardToken: '',
+    model: ''
+  }
+}
+
+export function normalizeReasonixSettings(input: Partial<ReasonixSettingsV1> | undefined): ReasonixSettingsV1 {
+  const defaults = defaultReasonixSettings()
+  const source = input ?? {}
+  return {
+    binaryPath: typeof source.binaryPath === 'string' ? source.binaryPath.trim() : defaults.binaryPath,
+    host: typeof source.host === 'string' && source.host.trim() ? source.host.trim() : defaults.host,
+    portMode: normalizeReasonixPortMode(source.portMode),
+    port: normalizePositiveInteger(source.port, defaults.port, 1, 65_535),
+    autoStart: normalizeBoolean(source.autoStart, defaults.autoStart),
+    workspaceRoot: typeof source.workspaceRoot === 'string' ? source.workspaceRoot.trim() : defaults.workspaceRoot,
+    dashboardToken: typeof source.dashboardToken === 'string' ? source.dashboardToken.trim() : defaults.dashboardToken,
+    model: typeof source.model === 'string' ? source.model.trim() : defaults.model
+  }
+}
+
 function normalizeRunMode(value: unknown): ClawRunMode {
   return value === 'plan' ? 'plan' : 'agent'
 }
@@ -562,16 +613,19 @@ export function mergeClawSettings(
 
 export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
   const maybeSettings = settings as AppSettingsV1 & {
+    reasonix?: Partial<ReasonixSettingsV1>
     notifications?: Partial<NotificationConfigV1>
     claw?: ClawSettingsPatchV1
     guiUpdate?: Partial<GuiUpdateConfigV1>
   }
   return {
     ...settings,
+    agentProvider: normalizeAgentProvider(settings.agentProvider),
     deepseek: {
       ...settings.deepseek,
       baseUrl: normalizeDeepseekBaseUrl(settings.deepseek.baseUrl)
     },
+    reasonix: normalizeReasonixSettings(maybeSettings.reasonix),
     notifications: {
       turnComplete: maybeSettings.notifications?.turnComplete !== false
     },

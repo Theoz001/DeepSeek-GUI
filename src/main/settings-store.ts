@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path'
 import {
   DEFAULT_DEEPSEEK_BASE_URL,
   defaultClawSettings,
+  defaultReasonixSettings,
   mergeClawSettings,
   normalizeAppSettings,
   type AppSettingsPatch,
@@ -128,6 +129,7 @@ const defaultSettings = (): AppSettingsV1 => ({
     approvalPolicy: 'auto',
     sandboxMode: 'workspace-write'
   },
+  reasonix: defaultReasonixSettings(),
   workspaceRoot: DEFAULT_WORKSPACE_ROOT,
   log: {
     enabled: true,
@@ -148,11 +150,11 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     ...defaults,
     ...parsed,
     deepseek: { ...defaults.deepseek, ...parsed.deepseek },
+    reasonix: { ...defaults.reasonix, ...parsed.reasonix },
     log: { ...defaults.log, ...parsed.log },
     notifications: { ...defaults.notifications, ...parsed.notifications },
     claw: mergeClawSettings(defaults.claw, parsed.claw),
-    guiUpdate: { ...defaults.guiUpdate, ...parsed.guiUpdate },
-    agentProvider: 'deepseek-runtime'
+    guiUpdate: { ...defaults.guiUpdate, ...parsed.guiUpdate }
   }
 }
 
@@ -249,11 +251,11 @@ export class JsonSettingsStore {
       ...cur,
       ...partial,
       deepseek: { ...cur.deepseek, ...(partial.deepseek ?? {}) },
+      reasonix: { ...cur.reasonix, ...(partial.reasonix ?? {}) },
       log: { ...cur.log, ...(partial.log ?? {}) },
       notifications: { ...cur.notifications, ...(partial.notifications ?? {}) },
       claw: mergeClawSettings(cur.claw, partial.claw),
-      guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) },
-      agentProvider: 'deepseek-runtime'
+      guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
     })
     await this.save(next)
     return next

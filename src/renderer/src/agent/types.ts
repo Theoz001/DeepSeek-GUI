@@ -1,4 +1,6 @@
-export type AgentProviderId = 'deepseek-runtime'
+import type { AgentProviderId } from '@shared/app-settings'
+
+export type { AgentProviderId }
 
 export type ToolItemKind = 'tool_call' | 'command_execution' | 'file_change'
 
