@@ -210,6 +210,30 @@ function armBusyWatchdog(
   })
 }
 
+function refreshCompletedThreadSnapshot(
+  threadId: string | null,
+  providerId: ChatState['providerId'],
+  set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  get: () => ChatState
+): void {
+  if (!threadId) return
+  const provider = getProvider(providerId)
+  void provider.getThreadDetail(threadId).then(({ blocks: rawBlocks, latestSeq }) => {
+    const blocks = hydrateBlockModelLabels(threadId, rawBlocks)
+    set((state) => {
+      if (state.activeThreadId !== threadId || state.busy || state.currentTurnId) return {}
+      return {
+        blocks,
+        lastSeq: Math.max(state.lastSeq, latestSeq),
+        liveReasoning: '',
+        liveAssistant: ''
+      }
+    })
+  }).catch(() => {
+    /* Completion refresh is best-effort; the live stream has already ended. */
+  })
+}
+
 function syncTurnCompletionPoll(
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
   get: () => ChatState
@@ -478,6 +502,7 @@ function buildThreadEventSink(
       const completedState = get()
       const completedThreadId = completedState.activeThreadId
       const completedTurnId = completedState.currentTurnId
+      const completedProviderId = completedState.providerId
       const completedKey = completedState.currentTurnId
         ? `turn:${completedState.currentTurnId}`
         : `active:${completedThreadId ?? 'unknown'}:${completedState.lastSeq}`
@@ -519,6 +544,7 @@ function buildThreadEventSink(
           'assistant'
         )
       }
+      refreshCompletedThreadSnapshot(completedThreadId, completedProviderId, set, get)
       notifyTurnComplete(completedThreadId, completedState, completedKey)
       syncTurnCompletionPoll(set, get)
       void get().refreshThreads()

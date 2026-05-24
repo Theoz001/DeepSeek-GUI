@@ -30,6 +30,12 @@ type ReasonixMessagesResponse = {
   busy?: boolean
 }
 
+type PendingCommandCompletion = {
+  threadId: string
+  itemId: string
+  detail: string
+}
+
 type ReasonixSessionRow = {
   name: string
   mtime?: number
@@ -91,6 +97,64 @@ type ReasonixModal = {
 
 const CURRENT_THREAD_ID = 'reasonix-current'
 const choiceOptionIdByRequestId = new Map<string, Map<string, string>>()
+const IMMEDIATE_SLASH_COMMANDS = new Set([
+  'about',
+  'apply',
+  'budget',
+  'checkpoint',
+  'context',
+  'cost',
+  'cwd',
+  'dashboard',
+  'discard',
+  'doctor',
+  'effort',
+  'exit',
+  'feedback',
+  'help',
+  'history',
+  'hooks',
+  'jobs',
+  'keys',
+  'kill',
+  'language',
+  'logs',
+  'mcp',
+  'memory',
+  'mode',
+  'model',
+  'models',
+  'permissions',
+  'plan',
+  'plans',
+  'prompt',
+  'qq',
+  'resource',
+  'restore',
+  'search-engine',
+  'sessions',
+  'show',
+  'skill',
+  'stats',
+  'status',
+  'stop',
+  'theme',
+  'undo',
+  'update',
+  'walk'
+])
+const SLASH_ALIASES: Record<string, string> = {
+  '?': 'help',
+  as: 'permissions',
+  clear: 'new',
+  lang: 'language',
+  q: 'exit',
+  quit: 'exit',
+  reset: 'new',
+  retitle: 'title',
+  sandbox: 'cwd',
+  se: 'search-engine'
+}
 
 function readRuntimeError(body: string, fallback: string): RuntimeErrorJson & { message: string } {
   if (!body) return { message: fallback }
@@ -128,6 +192,24 @@ function parseJson<T>(body: string, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+function selectedReasonixModel(model: string | undefined): string | null {
+  const value = model?.trim()
+  if (!value || value === 'auto') return null
+  return value
+}
+
+function parseSlashCommand(text: string): string | null {
+  const match = /^\/(\S+)/.exec(text.trim())
+  if (!match) return null
+  const raw = match[1]?.toLowerCase() ?? ''
+  return SLASH_ALIASES[raw] ?? raw
+}
+
+function shouldCompleteSlashImmediately(text: string): boolean {
+  const command = parseSlashCommand(text)
+  return command ? IMMEDIATE_SLASH_COMMANDS.has(command) : false
 }
 
 function createdAtFromMtime(value: number | undefined): string {
@@ -347,6 +429,7 @@ function trimChoiceCache(): void {
 export class ReasonixRuntimeProvider implements AgentProvider {
   readonly id: AgentProviderId = 'reasonix-runtime'
   readonly displayName = 'Reasonix'
+  private readonly pendingCommandCompletions: PendingCommandCompletion[] = []
 
   getCapabilities(): {
     interrupt: boolean
@@ -444,9 +527,34 @@ export class ReasonixRuntimeProvider implements AgentProvider {
     }
   }
 
+  private async applyModel(model: string): Promise<void> {
+    const r = await window.dsGui.runtimeRequest('/api/settings', 'POST', JSON.stringify({ model }))
+    if (!r.ok) throw toRuntimeError(readRuntimeError(r.body, `failed to switch Reasonix model to ${model}`))
+  }
+
+  private enqueueCommandCompletion(threadId: string, text: string): void {
+    this.pendingCommandCompletions.push({
+      threadId,
+      itemId: `reasonix-command-${Date.now()}-${this.pendingCommandCompletions.length}`,
+      detail: `Reasonix command accepted: ${text.trim()}`
+    })
+  }
+
+  private takeCommandCompletions(threadId: string): PendingCommandCompletion[] {
+    const matches: PendingCommandCompletion[] = []
+    for (let index = this.pendingCommandCompletions.length - 1; index >= 0; index -= 1) {
+      const item = this.pendingCommandCompletions[index]
+      if (item?.threadId !== threadId) continue
+      matches.unshift(item)
+      this.pendingCommandCompletions.splice(index, 1)
+    }
+    return matches
+  }
+
   async sendUserMessage(
     threadId: string,
-    text: string
+    text: string,
+    options?: { mode?: string; model?: string }
   ): Promise<{ turnId: string; threadId: string; userMessageItemId?: string }> {
     const sessions = await this.listSessions().catch(() => ({} as ReasonixSessionsResponse))
     const currentSession = sessions.currentSession || CURRENT_THREAD_ID
@@ -459,8 +567,12 @@ export class ReasonixRuntimeProvider implements AgentProvider {
       if (!switched.ok) throw toRuntimeError(readRuntimeError(switched.body, 'failed to switch Reasonix session'))
     }
 
+    const model = selectedReasonixModel(options?.model)
+    if (model) await this.applyModel(model)
+
     const r = await window.dsGui.runtimeRequest('/api/submit', 'POST', JSON.stringify({ prompt: text }))
     if (!r.ok) throw toRuntimeError(readRuntimeError(r.body, 'failed to submit prompt to Reasonix'))
+    if (shouldCompleteSlashImmediately(text)) this.enqueueCommandCompletion(threadId, text)
     const turnId = `reasonix-turn-${Date.now()}`
     return { turnId, threadId }
   }
@@ -620,6 +732,18 @@ export class ReasonixRuntimeProvider implements AgentProvider {
                 /* Older Reasonix builds may not expose /api/modal. */
               }
             }
+            const emitQueuedCommandCompletions = (): void => {
+              for (const completion of this.takeCommandCompletions(threadId)) {
+                markSeq()
+                sink.onTool({
+                  itemId: completion.itemId,
+                  summary: 'Reasonix command',
+                  status: 'success',
+                  detail: completion.detail
+                })
+                sink.onTurnComplete()
+              }
+            }
 
             const offData = window.dsGui.onSseEvent(({ streamId: sid, data }) => {
               if (sid !== streamId) return
@@ -743,6 +867,7 @@ export class ReasonixRuntimeProvider implements AgentProvider {
             signal.addEventListener('abort', onAbort, { once: true })
             try {
               await emitActiveModalSnapshot()
+              emitQueuedCommandCompletions()
               await window.dsGui.startSse(threadId, nextSeq, streamId)
             } catch (e) {
               finish({

@@ -239,4 +239,81 @@ describe('ReasonixRuntimeProvider', () => {
       { path: '/api/abort', method: 'POST', body: '{}' }
     ])
   })
+
+  it('applies the selected Reasonix model before submitting a prompt', async () => {
+    const provider = new ReasonixRuntimeProvider()
+    const calls: Array<{ path: string; method: string; body?: string }> = []
+
+    vi.stubGlobal('window', {
+      dsGui: {
+        runtimeRequest: vi.fn(async (path: string, method: string, body?: string) => {
+          calls.push({ path, method, body })
+          if (path === '/api/sessions') {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({ currentSession: 'current-session', sessions: [] })
+            }
+          }
+          return { ok: true, status: 200, body: '{}' }
+        })
+      }
+    })
+
+    await provider.sendUserMessage('current-session', 'use pro', { model: 'deepseek-v4-pro' })
+
+    expect(calls).toEqual([
+      { path: '/api/sessions', method: 'GET', body: undefined },
+      { path: '/api/settings', method: 'POST', body: JSON.stringify({ model: 'deepseek-v4-pro' }) },
+      { path: '/api/submit', method: 'POST', body: JSON.stringify({ prompt: 'use pro' }) }
+    ])
+  })
+
+  it('completes immediate slash commands that do not emit Reasonix busy events', async () => {
+    const provider = new ReasonixRuntimeProvider()
+    const ac = new AbortController()
+    const tools: ToolEventPayload[] = []
+    const sink = noopSink({
+      onTool: (tool) => tools.push(tool)
+    })
+
+    vi.stubGlobal('window', {
+      setTimeout,
+      clearTimeout,
+      dsGui: {
+        runtimeRequest: vi.fn(async (path: string) => {
+          if (path === '/api/sessions') {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({ currentSession: 'current-session', sessions: [] })
+            }
+          }
+          if (path === '/api/modal') {
+            return { ok: true, status: 200, body: JSON.stringify({ modal: null }) }
+          }
+          return { ok: true, status: 200, body: '{}' }
+        }),
+        onSseEvent: vi.fn(() => vi.fn()),
+        onSseError: vi.fn(() => vi.fn()),
+        onSseEnd: vi.fn(() => vi.fn()),
+        startSse: vi.fn(async () => {
+          ac.abort()
+        }),
+        stopSse: vi.fn(async () => undefined)
+      }
+    })
+
+    await provider.sendUserMessage('current-session', '/models')
+    await provider.subscribeThreadEvents('current-session', 0, sink, ac.signal)
+
+    expect(tools).toEqual([
+      expect.objectContaining({
+        summary: 'Reasonix command',
+        status: 'success',
+        detail: 'Reasonix command accepted: /models'
+      })
+    ])
+    expect(sink.onTurnComplete).toHaveBeenCalledTimes(1)
+  })
 })
