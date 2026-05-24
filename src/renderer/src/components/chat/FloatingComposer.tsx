@@ -1,5 +1,34 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { Bot, ChevronDown, Clock3, ListTodo, Send, Square, X } from 'lucide-react'
+import {
+  Activity,
+  Bot,
+  Brain,
+  Briefcase,
+  ChevronDown,
+  Clock3,
+  Cpu,
+  Database,
+  FileClock,
+  Gauge,
+  GitCommit,
+  HelpCircle,
+  History,
+  Languages,
+  Layers,
+  ListTodo,
+  MonitorDot,
+  Palette,
+  RotateCcw,
+  Send,
+  ShieldCheck,
+  SlidersHorizontal,
+  Square,
+  Stethoscope,
+  Terminal,
+  WalletCards,
+  Wrench,
+  X
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../store/chat-store'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
@@ -27,14 +56,336 @@ type Props = {
   onInterrupt: () => void
 }
 
-type SlashCommandId = 'plan' | 'agent'
-
 type SlashCommand = {
-  id: SlashCommandId
+  id: string
+  slashText: string
+  insertText?: string
+  kind: 'local' | 'runtime'
+  modeTarget?: 'plan' | 'agent'
   title: string
   description: string
   keywords: string[]
   icon: ReactElement
+}
+
+const REASONIX_SLASH_COMMANDS: Array<Omit<SlashCommand, 'title' | 'description' | 'icon'> & {
+  titleKey: string
+  descriptionKey: string
+  iconName:
+    | 'activity'
+    | 'brain'
+    | 'briefcase'
+    | 'cpu'
+    | 'database'
+    | 'fileClock'
+    | 'gauge'
+    | 'gitCommit'
+    | 'help'
+    | 'history'
+    | 'languages'
+    | 'layers'
+    | 'listTodo'
+    | 'monitor'
+    | 'palette'
+    | 'rotate'
+    | 'shield'
+    | 'sliders'
+    | 'stethoscope'
+    | 'terminal'
+    | 'wallet'
+    | 'wrench'
+}> = [
+  {
+    id: 'reasonix-help',
+    slashText: '/help',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixHelpTitle',
+    descriptionKey: 'slashCommandReasonixHelpDescription',
+    keywords: ['help', '?', '帮助', '命令'],
+    iconName: 'help'
+  },
+  {
+    id: 'reasonix-status',
+    slashText: '/status',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixStatusTitle',
+    descriptionKey: 'slashCommandReasonixStatusDescription',
+    keywords: ['status', '状态', 'session', 'context'],
+    iconName: 'activity'
+  },
+  {
+    id: 'reasonix-models',
+    slashText: '/models',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixModelsTitle',
+    descriptionKey: 'slashCommandReasonixModelsDescription',
+    keywords: ['models', 'model', '模型', '列表'],
+    iconName: 'cpu'
+  },
+  {
+    id: 'reasonix-model',
+    slashText: '/model <id>',
+    insertText: '/model ',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixModelTitle',
+    descriptionKey: 'slashCommandReasonixModelDescription',
+    keywords: ['model', '模型', 'switch', 'pro', 'flash'],
+    iconName: 'sliders'
+  },
+  {
+    id: 'reasonix-effort',
+    slashText: '/effort <level>',
+    insertText: '/effort ',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixEffortTitle',
+    descriptionKey: 'slashCommandReasonixEffortDescription',
+    keywords: ['effort', 'reasoning', '推理', '强度'],
+    iconName: 'gauge'
+  },
+  {
+    id: 'reasonix-budget',
+    slashText: '/budget',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixBudgetTitle',
+    descriptionKey: 'slashCommandReasonixBudgetDescription',
+    keywords: ['budget', 'cost', '预算', '费用'],
+    iconName: 'wallet'
+  },
+  {
+    id: 'reasonix-permissions',
+    slashText: '/permissions',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixPermissionsTitle',
+    descriptionKey: 'slashCommandReasonixPermissionsDescription',
+    keywords: ['permissions', 'allowlist', '权限', '白名单'],
+    iconName: 'shield'
+  },
+  {
+    id: 'reasonix-mcp',
+    slashText: '/mcp',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixMcpTitle',
+    descriptionKey: 'slashCommandReasonixMcpDescription',
+    keywords: ['mcp', 'tools', '工具'],
+    iconName: 'database'
+  },
+  {
+    id: 'reasonix-memory',
+    slashText: '/memory',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixMemoryTitle',
+    descriptionKey: 'slashCommandReasonixMemoryDescription',
+    keywords: ['memory', '记忆', 'REASONIX'],
+    iconName: 'brain'
+  },
+  {
+    id: 'reasonix-skill',
+    slashText: '/skill',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixSkillTitle',
+    descriptionKey: 'slashCommandReasonixSkillDescription',
+    keywords: ['skill', 'skills', '技能'],
+    iconName: 'wrench'
+  },
+  {
+    id: 'reasonix-hooks',
+    slashText: '/hooks',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixHooksTitle',
+    descriptionKey: 'slashCommandReasonixHooksDescription',
+    keywords: ['hooks', 'hook', '钩子'],
+    iconName: 'terminal'
+  },
+  {
+    id: 'reasonix-doctor',
+    slashText: '/doctor',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixDoctorTitle',
+    descriptionKey: 'slashCommandReasonixDoctorDescription',
+    keywords: ['doctor', 'health', '诊断', '检查'],
+    iconName: 'stethoscope'
+  },
+  {
+    id: 'reasonix-context',
+    slashText: '/context',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixContextTitle',
+    descriptionKey: 'slashCommandReasonixContextDescription',
+    keywords: ['context', 'tokens', '上下文'],
+    iconName: 'layers'
+  },
+  {
+    id: 'reasonix-stats',
+    slashText: '/stats',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixStatsTitle',
+    descriptionKey: 'slashCommandReasonixStatsDescription',
+    keywords: ['stats', 'cost', 'statistics', '统计'],
+    iconName: 'monitor'
+  },
+  {
+    id: 'reasonix-sessions',
+    slashText: '/sessions',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixSessionsTitle',
+    descriptionKey: 'slashCommandReasonixSessionsDescription',
+    keywords: ['sessions', 'session', '会话'],
+    iconName: 'history'
+  },
+  {
+    id: 'reasonix-plans',
+    slashText: '/plans',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixPlansTitle',
+    descriptionKey: 'slashCommandReasonixPlansDescription',
+    keywords: ['plans', 'plan', '计划', '规划'],
+    iconName: 'listTodo'
+  },
+  {
+    id: 'reasonix-plan',
+    slashText: '/plan on',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixPlanTitle',
+    descriptionKey: 'slashCommandReasonixPlanDescription',
+    keywords: ['plan', 'planning', 'readonly', '规划'],
+    iconName: 'listTodo'
+  },
+  {
+    id: 'reasonix-mode',
+    slashText: '/mode <review|auto|yolo>',
+    insertText: '/mode ',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixModeTitle',
+    descriptionKey: 'slashCommandReasonixModeDescription',
+    keywords: ['mode', 'review', 'auto', 'yolo', '模式'],
+    iconName: 'palette'
+  },
+  {
+    id: 'reasonix-checkpoint',
+    slashText: '/checkpoint',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixCheckpointTitle',
+    descriptionKey: 'slashCommandReasonixCheckpointDescription',
+    keywords: ['checkpoint', 'snapshot', '快照'],
+    iconName: 'fileClock'
+  },
+  {
+    id: 'reasonix-restore',
+    slashText: '/restore <name|id>',
+    insertText: '/restore ',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixRestoreTitle',
+    descriptionKey: 'slashCommandReasonixRestoreDescription',
+    keywords: ['restore', 'rollback', '恢复', '回滚'],
+    iconName: 'rotate'
+  },
+  {
+    id: 'reasonix-undo',
+    slashText: '/undo',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixUndoTitle',
+    descriptionKey: 'slashCommandReasonixUndoDescription',
+    keywords: ['undo', 'rollback', '撤销'],
+    iconName: 'rotate'
+  },
+  {
+    id: 'reasonix-apply',
+    slashText: '/apply',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixApplyTitle',
+    descriptionKey: 'slashCommandReasonixApplyDescription',
+    keywords: ['apply', 'edit', '应用', '修改'],
+    iconName: 'gitCommit'
+  },
+  {
+    id: 'reasonix-history',
+    slashText: '/history',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixHistoryTitle',
+    descriptionKey: 'slashCommandReasonixHistoryDescription',
+    keywords: ['history', 'diff', '历史'],
+    iconName: 'history'
+  },
+  {
+    id: 'reasonix-jobs',
+    slashText: '/jobs',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixJobsTitle',
+    descriptionKey: 'slashCommandReasonixJobsDescription',
+    keywords: ['jobs', 'background', '后台', '任务'],
+    iconName: 'briefcase'
+  },
+  {
+    id: 'reasonix-logs',
+    slashText: '/logs <id>',
+    insertText: '/logs ',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixLogsTitle',
+    descriptionKey: 'slashCommandReasonixLogsDescription',
+    keywords: ['logs', 'job', '日志'],
+    iconName: 'terminal'
+  },
+  {
+    id: 'reasonix-language',
+    slashText: '/language <EN|zh-CN>',
+    insertText: '/language ',
+    kind: 'runtime',
+    titleKey: 'slashCommandReasonixLanguageTitle',
+    descriptionKey: 'slashCommandReasonixLanguageDescription',
+    keywords: ['language', 'lang', '语言'],
+    iconName: 'languages'
+  }
+]
+
+function slashIcon(name: (typeof REASONIX_SLASH_COMMANDS)[number]['iconName']): ReactElement {
+  const className = 'h-4 w-4'
+  const strokeWidth = 1.9
+  switch (name) {
+    case 'activity':
+      return <Activity className={className} strokeWidth={strokeWidth} />
+    case 'brain':
+      return <Brain className={className} strokeWidth={strokeWidth} />
+    case 'briefcase':
+      return <Briefcase className={className} strokeWidth={strokeWidth} />
+    case 'cpu':
+      return <Cpu className={className} strokeWidth={strokeWidth} />
+    case 'database':
+      return <Database className={className} strokeWidth={strokeWidth} />
+    case 'fileClock':
+      return <FileClock className={className} strokeWidth={strokeWidth} />
+    case 'gauge':
+      return <Gauge className={className} strokeWidth={strokeWidth} />
+    case 'gitCommit':
+      return <GitCommit className={className} strokeWidth={strokeWidth} />
+    case 'history':
+      return <History className={className} strokeWidth={strokeWidth} />
+    case 'languages':
+      return <Languages className={className} strokeWidth={strokeWidth} />
+    case 'layers':
+      return <Layers className={className} strokeWidth={strokeWidth} />
+    case 'listTodo':
+      return <ListTodo className={className} strokeWidth={strokeWidth} />
+    case 'monitor':
+      return <MonitorDot className={className} strokeWidth={strokeWidth} />
+    case 'palette':
+      return <Palette className={className} strokeWidth={strokeWidth} />
+    case 'rotate':
+      return <RotateCcw className={className} strokeWidth={strokeWidth} />
+    case 'shield':
+      return <ShieldCheck className={className} strokeWidth={strokeWidth} />
+    case 'sliders':
+      return <SlidersHorizontal className={className} strokeWidth={strokeWidth} />
+    case 'stethoscope':
+      return <Stethoscope className={className} strokeWidth={strokeWidth} />
+    case 'terminal':
+      return <Terminal className={className} strokeWidth={strokeWidth} />
+    case 'wallet':
+      return <WalletCards className={className} strokeWidth={strokeWidth} />
+    case 'wrench':
+      return <Wrench className={className} strokeWidth={strokeWidth} />
+    default:
+      return <HelpCircle className={className} strokeWidth={strokeWidth} />
+  }
 }
 
 function getSlashQuery(input: string): string | null {
@@ -62,6 +413,7 @@ export function FloatingComposer({
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const route = useChatStore((s) => s.route)
+  const providerId = useChatStore((s) => s.providerId)
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const activeThreadId = useChatStore((s) => s.activeThreadId)
   const threads = useChatStore((s) => s.threads)
@@ -127,6 +479,9 @@ export function FloatingComposer({
     const commands: SlashCommand[] = [
       {
         id: 'plan',
+        slashText: '/plan',
+        kind: 'local',
+        modeTarget: 'plan',
         title: t('slashCommandPlanTitle'),
         description:
           mode === 'plan'
@@ -140,6 +495,9 @@ export function FloatingComposer({
     if (mode === 'plan') {
       commands.splice(1, 0, {
         id: 'agent',
+        slashText: '/agent',
+        kind: 'local',
+        modeTarget: 'agent',
         title: t('slashCommandAgentTitle'),
         description: t('slashCommandAgentDescription'),
         keywords: ['agent', 'default', 'normal', '代理', '默认'],
@@ -147,14 +505,29 @@ export function FloatingComposer({
       })
     }
 
+    if (providerId === 'reasonix-runtime' && route !== 'claw') {
+      commands.push(
+        ...REASONIX_SLASH_COMMANDS.map((command) => ({
+          id: command.id,
+          slashText: command.slashText,
+          insertText: command.insertText,
+          kind: command.kind,
+          title: t(command.titleKey),
+          description: t(command.descriptionKey),
+          keywords: command.keywords,
+          icon: slashIcon(command.iconName)
+        }))
+      )
+    }
+
     return commands
-  }, [mode, t])
+  }, [mode, providerId, route, t])
 
   const filteredSlashCommands = useMemo(() => {
     if (slashQuery == null) return []
     if (!slashQuery) return slashCommands
     return slashCommands.filter((command) => {
-      const haystack = [command.id, command.title, command.description, ...command.keywords]
+      const haystack = [command.id, command.slashText, command.title, command.description, ...command.keywords]
       return haystack.some((part) => part.toLowerCase().includes(slashQuery))
     })
   }, [slashCommands, slashQuery])
@@ -214,24 +587,20 @@ export function FloatingComposer({
     window.requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
-  const applySlashCommand = (commandId: SlashCommandId): void => {
-    if (commandId === 'plan') {
-      setMode('plan')
+  const applySlashCommand = (command: SlashCommand): void => {
+    if (command.kind === 'local' && command.modeTarget) {
+      setMode(command.modeTarget)
       setInput('')
       focusComposer()
       return
     }
-    if (commandId === 'agent') {
-      setMode('agent')
-      setInput('')
-      focusComposer()
-      return
-    }
+    setInput(command.insertText ?? command.slashText)
+    focusComposer()
   }
 
   const handlePrimaryAction = (): void => {
     if (highlightedSlashCommand) {
-      applySlashCommand(highlightedSlashCommand.id)
+      applySlashCommand(highlightedSlashCommand)
       return
     }
     onSend()
@@ -273,12 +642,12 @@ export function FloatingComposer({
 
       <div className="relative">
         {slashQuery != null ? (
-          <div className="ds-card-strong absolute inset-x-2 bottom-full z-30 mb-3 overflow-hidden rounded-[26px] p-2 shadow-[0_26px_70px_rgba(15,23,42,0.16)]">
+          <div className="ds-card-strong absolute inset-x-2 bottom-full z-30 mb-3 max-h-[min(560px,calc(100vh-220px))] overflow-hidden rounded-[26px] p-2 shadow-[0_26px_70px_rgba(15,23,42,0.16)]">
             <div className="px-3 pb-2 pt-1 text-[12px] font-medium uppercase tracking-[0.14em] text-ds-faint">
               {t('slashCommandMenuTitle')}
             </div>
             {filteredSlashCommands.length > 0 ? (
-              <div className="flex flex-col gap-1">
+              <div className="flex max-h-[min(492px,calc(100vh-288px))] flex-col gap-1 overflow-y-auto pr-1">
                 {filteredSlashCommands.map((command) => {
                   const active = highlightedSlashCommand?.id === command.id
                   return (
@@ -286,7 +655,7 @@ export function FloatingComposer({
                       key={command.id}
                       type="button"
                       onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => applySlashCommand(command.id)}
+                      onClick={() => applySlashCommand(command)}
                       className={`flex w-full items-center gap-3 rounded-[20px] px-3 py-3 text-left transition ${
                         active
                           ? 'bg-accent/10 text-ds-ink shadow-[inset_0_0_0_1px_rgba(0,136,255,0.14)]'
@@ -310,9 +679,9 @@ export function FloatingComposer({
                       </span>
                       <span className="flex shrink-0 flex-col items-end gap-1">
                         <span className="rounded-full border border-ds-border-muted px-2.5 py-1 text-[11px] font-semibold text-ds-faint">
-                          /{command.id}
+                          {command.slashText}
                         </span>
-                        {command.id === 'plan' && mode === 'plan' ? (
+                        {command.kind === 'local' && command.id === 'plan' && mode === 'plan' ? (
                           <span className="rounded-full bg-accent/10 px-2.5 py-1 text-[11px] font-semibold text-accent">
                             {t('slashCommandCurrent')}
                           </span>
