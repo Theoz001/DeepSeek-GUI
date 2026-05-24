@@ -265,6 +265,45 @@ describe('ReasonixRuntimeProvider', () => {
     expect(calls).toEqual([
       { path: '/api/sessions', method: 'GET', body: undefined },
       { path: '/api/settings', method: 'POST', body: JSON.stringify({ model: 'deepseek-v4-pro' }) },
+      { path: '/api/models', method: 'GET', body: undefined },
+      { path: '/api/submit', method: 'POST', body: JSON.stringify({ prompt: 'use pro' }) }
+    ])
+  })
+
+  it('falls back to the native Reasonix model command when settings do not update the live model', async () => {
+    const provider = new ReasonixRuntimeProvider()
+    const calls: Array<{ path: string; method: string; body?: string }> = []
+
+    vi.stubGlobal('window', {
+      dsGui: {
+        runtimeRequest: vi.fn(async (path: string, method: string, body?: string) => {
+          calls.push({ path, method, body })
+          if (path === '/api/sessions') {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({ currentSession: 'current-session', sessions: [] })
+            }
+          }
+          if (path === '/api/models') {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({ current: 'deepseek-v4-flash', models: ['deepseek-v4-flash', 'deepseek-v4-pro'] })
+            }
+          }
+          return { ok: true, status: 200, body: '{}' }
+        })
+      }
+    })
+
+    await provider.sendUserMessage('current-session', 'use pro', { model: 'deepseek-v4-pro' })
+
+    expect(calls).toEqual([
+      { path: '/api/sessions', method: 'GET', body: undefined },
+      { path: '/api/settings', method: 'POST', body: JSON.stringify({ model: 'deepseek-v4-pro' }) },
+      { path: '/api/models', method: 'GET', body: undefined },
+      { path: '/api/submit', method: 'POST', body: JSON.stringify({ prompt: '/model deepseek-v4-pro' }) },
       { path: '/api/submit', method: 'POST', body: JSON.stringify({ prompt: 'use pro' }) }
     ])
   })
@@ -289,6 +328,13 @@ describe('ReasonixRuntimeProvider', () => {
               body: JSON.stringify({ currentSession: 'current-session', sessions: [] })
             }
           }
+          if (path === '/api/models') {
+            return {
+              ok: true,
+              status: 200,
+              body: JSON.stringify({ current: 'deepseek-v4-pro', models: ['deepseek-v4-flash', 'deepseek-v4-pro'] })
+            }
+          }
           if (path === '/api/modal') {
             return { ok: true, status: 200, body: JSON.stringify({ modal: null }) }
           }
@@ -311,7 +357,13 @@ describe('ReasonixRuntimeProvider', () => {
       expect.objectContaining({
         summary: 'Reasonix command',
         status: 'success',
-        detail: 'Reasonix command accepted: /models'
+        detail: [
+          'Current model: deepseek-v4-pro',
+          '',
+          'Available models:',
+          '- deepseek-v4-flash',
+          '- deepseek-v4-pro'
+        ].join('\n')
       })
     ])
     expect(sink.onTurnComplete).toHaveBeenCalledTimes(1)

@@ -30,6 +30,11 @@ type ReasonixMessagesResponse = {
   busy?: boolean
 }
 
+type ReasonixModelsResponse = {
+  models?: string[] | null
+  current?: string | null
+}
+
 type PendingCommandCompletion = {
   threadId: string
   itemId: string
@@ -198,6 +203,25 @@ function selectedReasonixModel(model: string | undefined): string | null {
   const value = model?.trim()
   if (!value || value === 'auto') return null
   return value
+}
+
+function isModelsCommand(text: string): boolean {
+  return /^\/models\s*$/i.test(text.trim())
+}
+
+function formatModelsCommandResult(body: string): string {
+  const parsed = parseJson<ReasonixModelsResponse>(body, {})
+  const current = parsed.current?.trim() || 'unknown'
+  const models = Array.isArray(parsed.models)
+    ? parsed.models.map((model) => model.trim()).filter(Boolean)
+    : []
+  const list = models.length > 0 ? models : ['deepseek-v4-flash', 'deepseek-v4-pro']
+  return [
+    `Current model: ${current}`,
+    '',
+    'Available models:',
+    ...list.map((model) => `- ${model}`)
+  ].join('\n')
 }
 
 function parseSlashCommand(text: string): string | null {
@@ -530,6 +554,34 @@ export class ReasonixRuntimeProvider implements AgentProvider {
   private async applyModel(model: string): Promise<void> {
     const r = await window.dsGui.runtimeRequest('/api/settings', 'POST', JSON.stringify({ model }))
     if (!r.ok) throw toRuntimeError(readRuntimeError(r.body, `failed to switch Reasonix model to ${model}`))
+
+    const current = await this.getCurrentModel()
+    if (current === null || current === model) return
+
+    const fallback = await window.dsGui.runtimeRequest(
+      '/api/submit',
+      'POST',
+      JSON.stringify({ prompt: `/model ${model}` })
+    )
+    if (!fallback.ok) {
+      throw toRuntimeError(readRuntimeError(fallback.body, `failed to switch Reasonix model to ${model}`))
+    }
+  }
+
+  private async getCurrentModel(): Promise<string | null> {
+    const r = await window.dsGui.runtimeRequest('/api/models', 'GET')
+    if (!r.ok) return null
+    return parseJson<ReasonixModelsResponse>(r.body, {}).current?.trim() || null
+  }
+
+  private async enqueueModelsCommandResult(threadId: string): Promise<void> {
+    const r = await window.dsGui.runtimeRequest('/api/models', 'GET')
+    if (!r.ok) throw toRuntimeError(readRuntimeError(r.body, 'failed to list Reasonix models'))
+    this.pendingCommandCompletions.push({
+      threadId,
+      itemId: `reasonix-models-${Date.now()}-${this.pendingCommandCompletions.length}`,
+      detail: formatModelsCommandResult(r.body)
+    })
   }
 
   private enqueueCommandCompletion(threadId: string, text: string): void {
@@ -569,6 +621,11 @@ export class ReasonixRuntimeProvider implements AgentProvider {
 
     const model = selectedReasonixModel(options?.model)
     if (model) await this.applyModel(model)
+
+    if (isModelsCommand(text)) {
+      await this.enqueueModelsCommandResult(threadId)
+      return { turnId: `reasonix-turn-${Date.now()}`, threadId }
+    }
 
     const r = await window.dsGui.runtimeRequest('/api/submit', 'POST', JSON.stringify({ prompt: text }))
     if (!r.ok) throw toRuntimeError(readRuntimeError(r.body, 'failed to submit prompt to Reasonix'))

@@ -435,7 +435,7 @@
   "slashCommandReasonixStatusTitle": "Show runtime status",
   "slashCommandReasonixStatusDescription": "Show current model, context, session, and runtime state.",
   "slashCommandReasonixModelsTitle": "List models",
-  "slashCommandReasonixModelsDescription": "Fetch available models from DeepSeek /models.",
+  "slashCommandReasonixModelsDescription": "Read the current model and available model list from the Reasonix runtime.",
   "slashCommandReasonixModelTitle": "Switch model",
   "slashCommandReasonixModelDescription": "Enter a target model id, for example deepseek-v4-pro.",
   "slashCommandReasonixEffortTitle": "Set reasoning effort",

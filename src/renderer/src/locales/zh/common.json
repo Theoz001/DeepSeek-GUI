@@ -435,7 +435,7 @@
   "slashCommandReasonixStatusTitle": "查看运行状态",
   "slashCommandReasonixStatusDescription": "显示当前模型、上下文、会话和运行状态。",
   "slashCommandReasonixModelsTitle": "列出模型",
-  "slashCommandReasonixModelsDescription": "从 DeepSeek /models 获取可用模型列表。",
+  "slashCommandReasonixModelsDescription": "从 Reasonix 运行时读取当前模型和可用模型列表。",
   "slashCommandReasonixModelTitle": "切换模型",
   "slashCommandReasonixModelDescription": "输入目标模型 ID，例如 deepseek-v4-pro。",
   "slashCommandReasonixEffortTitle": "设置推理强度",
